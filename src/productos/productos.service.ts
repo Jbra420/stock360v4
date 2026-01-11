@@ -7,6 +7,33 @@ import { UpdateProductoDto } from './dto/update-producto.dto';
 export class ProductosService {
   constructor(private supabase: SupabaseService) {}
 
+  /**
+   * Aplana el resultado para que el FRONT reciba:
+   * - categoria_nombre: string
+   * - stock_actual: number
+   * - stock_minimo: number
+   * y no objetos anidados "categorias" / "inventario"
+   */
+  private mapProducto(p: any) {
+    const categoria_nombre = p?.categorias?.nombre ?? 'Sin categoría';
+
+    // inventario a veces llega como array (dependiendo relación), o como objeto
+    const inv = Array.isArray(p?.inventario) ? (p.inventario[0] ?? null) : (p?.inventario ?? null);
+
+    const stock_actual = inv?.stock_actual ?? 0;
+    const stock_minimo = inv?.stock_minimo ?? 0;
+
+    // quitamos anidados para devolver plano
+    const { categorias, inventario, ...rest } = p ?? {};
+
+    return {
+      ...rest,
+      categoria_nombre,
+      stock_actual,
+      stock_minimo,
+    };
+  }
+
   async findAll(params?: { search?: string; categoria_id?: string; active?: string }) {
     const search = params?.search?.trim();
     const categoria_id = params?.categoria_id?.trim();
@@ -24,14 +51,14 @@ export class ProductosService {
 
     // búsqueda simple
     if (search) {
-      // busca por nombre o sku
       query = query.or(`nombre.ilike.%${search}%,sku.ilike.%${search}%`);
     }
 
     const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) throw new BadRequestException(error.message);
-    return data;
+
+    return (data ?? []).map((p) => this.mapProducto(p));
   }
 
   async findOne(id: string) {
@@ -43,15 +70,14 @@ export class ProductosService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
-    return data;
+    return this.mapProducto(data);
   }
 
   /**
    * Crea producto y crea inventario automáticamente con stock_actual=0.
-   * Si falla inventario, hacemos rollback borrando el producto.
+   * Si falla inventario, rollback borrando el producto.
    */
   async create(userId: string, dto: CreateProductoDto) {
-    // 1) crear producto
     const { data: producto, error: prodErr } = await this.supabase
       .admin()
       .from('productos')
@@ -70,7 +96,6 @@ export class ProductosService {
 
     if (prodErr) throw new BadRequestException(prodErr.message);
 
-    // 2) crear inventario (stock=0)
     const stockMin = dto.stock_minimo ?? 0;
 
     const { error: invErr } = await this.supabase
@@ -83,17 +108,14 @@ export class ProductosService {
       });
 
     if (invErr) {
-      // rollback: borrar producto creado
       await this.supabase.admin().from('productos').delete().eq('id', producto.id);
       throw new BadRequestException(`Producto creado pero inventario falló: ${invErr.message}`);
     }
 
-    // 3) devolver producto completo con inventario
     return this.findOne(producto.id);
   }
 
   async update(id: string, dto: UpdateProductoDto) {
-    // 1) actualizar producto
     const { data: updated, error } = await this.supabase
       .admin()
       .from('productos')
@@ -112,7 +134,6 @@ export class ProductosService {
 
     if (error) throw new BadRequestException(error.message);
 
-    // 2) si vienen cambios de stock_minimo, actualizar inventario
     if (dto.stock_minimo !== undefined) {
       const { error: invErr } = await this.supabase
         .admin()
@@ -127,7 +148,6 @@ export class ProductosService {
   }
 
   async remove(id: string) {
-    // inventario se borra por cascade (inventario.producto_id references productos on delete cascade)
     const { error } = await this.supabase.admin().from('productos').delete().eq('id', id);
     if (error) throw new BadRequestException(error.message);
     return { ok: true };

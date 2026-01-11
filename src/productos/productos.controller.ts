@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ProductosService } from './productos.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -15,10 +26,12 @@ export class ProductosController {
   @Get()
   findAll(
     @Query('search') search?: string,
+    @Query('q') q?: string, // ✅ compatibilidad con tu front (ProductosApiService usa "q")
     @Query('categoria_id') categoria_id?: string,
     @Query('active') active?: string,
   ) {
-    return this.productos.findAll({ search, categoria_id, active });
+    const term = (search ?? q)?.toString();
+    return this.productos.findAll({ search: term, categoria_id, active });
   }
 
   // Admin y user: ver uno
