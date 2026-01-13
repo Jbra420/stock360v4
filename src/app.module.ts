@@ -8,7 +8,7 @@ import { MovimientosModule } from './movimientos/movimientos.module';
 import { AdminModule } from './admin/admin.module';
 import { UserModule } from './user/user.module';
 import { InventarioModule } from './inventario/inventario.module';
-
+import { UsuariosModule } from './usuarios/usuarios.module';
 
 @Module({
   imports: [
@@ -21,6 +21,7 @@ import { InventarioModule } from './inventario/inventario.module';
     AdminModule,
     UserModule,
     InventarioModule,
+    UsuariosModule
   ],
 })
 export class AppModule {}

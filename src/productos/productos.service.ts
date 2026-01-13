@@ -7,23 +7,15 @@ import { UpdateProductoDto } from './dto/update-producto.dto';
 export class ProductosService {
   constructor(private supabase: SupabaseService) {}
 
-  /**
-   * Aplana el resultado para que el FRONT reciba:
-   * - categoria_nombre: string
-   * - stock_actual: number
-   * - stock_minimo: number
-   * y no objetos anidados "categorias" / "inventario"
-   */
   private mapProducto(p: any) {
     const categoria_nombre = p?.categorias?.nombre ?? 'Sin categoría';
 
-    // inventario a veces llega como array (dependiendo relación), o como objeto
+
     const inv = Array.isArray(p?.inventario) ? (p.inventario[0] ?? null) : (p?.inventario ?? null);
 
     const stock_actual = inv?.stock_actual ?? 0;
     const stock_minimo = inv?.stock_minimo ?? 0;
 
-    // quitamos anidados para devolver plano
     const { categorias, inventario, ...rest } = p ?? {};
 
     return {
@@ -73,10 +65,6 @@ export class ProductosService {
     return this.mapProducto(data);
   }
 
-  /**
-   * Crea producto y crea inventario automáticamente con stock_actual=0.
-   * Si falla inventario, rollback borrando el producto.
-   */
   async create(userId: string, dto: CreateProductoDto) {
     const { data: producto, error: prodErr } = await this.supabase
       .admin()

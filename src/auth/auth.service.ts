@@ -1,99 +1,79 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createClient } from '@supabase/supabase-js';
 import { SupabaseService } from '../supabase/supabase.service';
+
+type Role = 'admin' | 'user';
 
 @Injectable()
 export class AuthService {
-  me(id: any) {
-    throw new Error('Method not implemented.');
-  }
-  private supabaseAnon;
+  constructor(private readonly supabase: SupabaseService) {}
 
-  constructor(
-    private config: ConfigService,
-    private supabase: SupabaseService, // service role (para leer profiles)
-  ) {
-    const url = this.config.get<string>('SUPABASE_URL')!;
-    const anonKey = this.config.get<string>('SUPABASE_ANON_KEY')!;
-
-    // Cliente anon: sirve para auth (email/password) como lo haría el frontend
-    this.supabaseAnon = createClient(url, anonKey, {
-      auth: { persistSession: false },
-    });
+  private buildEmailFromUsername(username: string) {
+    return `${username}@stock360.local`;
   }
 
   async login(identifier: string, password: string) {
-  if (!identifier || !password) {
-    throw new BadRequestException('Usuario y contraseña son obligatorios');
-  }
+    const id = String(identifier ?? '').trim();
+    const pass = String(password ?? '').trim();
 
-  // 1) Determinar email (si viene email, se usa; si viene username, se busca en profiles)
-  let email = identifier.trim();
+    if (!id || !pass) {
+      throw new BadRequestException('Faltan credenciales');
+    }
 
-  const looksLikeEmail = email.includes('@');
+    // Si viene username, lo convertimos al email interno usado al crear usuario
+    const email = id.includes('@') ? id : this.buildEmailFromUsername(id);
 
-  if (!looksLikeEmail) {
-    const username = email.toLowerCase();
+    const sb = this.supabase.anon();
 
-    const { data: prof, error: profErr } = await this.supabase
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+    if (error || !data?.session || !data?.user) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    const userId = data.user.id;
+
+    // Perfil desde profiles
+    const { data: profile, error: profErr } = await this.supabase
       .admin()
       .from('profiles')
-      .select('id, username')
-      .ilike('username', username)
+      .select('id, full_name, username, role, is_active, created_at, updated_at')
+      .eq('id', userId)
       .single();
 
-    if (profErr || !prof) {
-      throw new UnauthorizedException('Usuario o contraseña inválidos');
+    if (profErr) {
+      // Si no hay profile, igual devolvemos lo mínimo
+      return {
+        token: data.session.access_token,
+        user: { id: userId, email },
+      };
     }
 
-    // buscar el email real en Auth desde el id del perfil (id = auth.users.id)
-    const { data: userAuth, error: userErr } = await this.supabase
+    return {
+      token: data.session.access_token,
+      user: {
+        ...profile,
+        email, // email real usado en auth
+      },
+    };
+  }
+
+  async me(userId: string) {
+    if (!userId) throw new UnauthorizedException('Token inválido o userId faltante');
+
+    // Traemos email real desde auth.users usando admin
+    const { data: authData } = await this.supabase.admin().auth.admin.getUserById(userId);
+    const email = authData?.user?.email ?? null;
+
+    const { data, error } = await this.supabase
       .admin()
-      .auth
-      .admin
-      .getUserById(prof.id);
+      .from('profiles')
+      .select('id, full_name, username, role, is_active, created_at, updated_at')
+      .eq('id', userId)
+      .single();
 
-    if (userErr || !userAuth?.user?.email) {
-      throw new UnauthorizedException('Usuario o contraseña inválidos');
+    if (error || !data) {
+      return { user: { id: userId, email } };
     }
 
-    email = userAuth.user.email;
+    return { user: { ...data, email } };
   }
-
-  // 2) Login normal con email/password
-  const { data, error } = await this.supabaseAnon.auth.signInWithPassword({
-    email,
-    password,
-  });
-
-  if (error || !data?.session?.access_token || !data.user?.id) {
-    throw new UnauthorizedException('Usuario o contraseña inválidos');
-  }
-
-  // 3) Sacar perfil y rol
-  const { data: profile, error: profErr2 } = await this.supabase
-    .admin()
-    .from('profiles')
-    .select('id, full_name, role, is_active, username')
-    .eq('id', data.user.id)
-    .single();
-
-  if (profErr2 || !profile) throw new UnauthorizedException('No existe perfil para este usuario');
-  if (!profile.is_active) throw new UnauthorizedException('Usuario inactivo');
-
-  return {
-    access_token: data.session.access_token,
-    refresh_token: data.session.refresh_token,
-    expires_in: data.session.expires_in,
-    token_type: data.session.token_type,
-    user: {
-      id: profile.id,
-      full_name: profile.full_name,
-      role: profile.role,
-      email: data.user.email,
-      username: profile.username, // opcional para mostrar en UI
-    },
-  };
-}
 }
