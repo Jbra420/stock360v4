@@ -32,9 +32,13 @@ export class ProductosService {
     const active = params?.active?.trim(); // "true" | "false" | undefined
 
     let query = this.supabase
-      .admin()
-      .from('productos')
-      .select('*, categorias ( id, nombre ), inventario ( stock_actual, stock_minimo, updated_at )');
+  .admin()
+  .from('productos')
+  .select(`
+    *,
+    categorias:categoria_id ( id, nombre ),
+    inventario:inventario!inventario_producto_fk ( stock_actual, stock_minimo, updated_at )
+  `);
 
     // filtros
     if (categoria_id) query = query.eq('categoria_id', categoria_id);
@@ -54,12 +58,16 @@ export class ProductosService {
   }
 
   async findOne(id: string) {
-    const { data, error } = await this.supabase
-      .admin()
-      .from('productos')
-      .select('*, categorias ( id, nombre ), inventario ( stock_actual, stock_minimo, updated_at )')
-      .eq('id', id)
-      .single();
+const { data, error } = await this.supabase
+  .admin()
+  .from('productos')
+  .select(`
+    *,
+    categorias:categoria_id ( id, nombre ),
+    inventario:inventario!inventario_producto_fk ( stock_actual, stock_minimo, updated_at )
+  `)
+  .eq('id', id)
+  .single();
 
     if (error) throw new BadRequestException(error.message);
     return this.mapProducto(data);
@@ -136,8 +144,14 @@ export class ProductosService {
   }
 
   async remove(id: string) {
-    const { error } = await this.supabase.admin().from('productos').delete().eq('id', id);
-    if (error) throw new BadRequestException(error.message);
-    return { ok: true };
-  }
+  const { error } = await this.supabase
+    .admin()
+    .from('productos')
+    .update({ is_active: false })
+    .eq('id', id);
+
+  if (error) throw new BadRequestException(error.message);
+
+  return { ok: true, deleted: false, inactive: true };
+}
 }

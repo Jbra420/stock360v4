@@ -9,6 +9,7 @@ import { AdminModule } from './admin/admin.module';
 import { UserModule } from './user/user.module';
 import { InventarioModule } from './inventario/inventario.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
+import { RfidModule } from './rfid/rfid.module';
 
 @Module({
   imports: [
@@ -21,7 +22,8 @@ import { UsuariosModule } from './usuarios/usuarios.module';
     AdminModule,
     UserModule,
     InventarioModule,
-    UsuariosModule
+    UsuariosModule,
+    RfidModule
   ],
 })
 export class AppModule {}
