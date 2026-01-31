@@ -64,20 +64,32 @@ export class MovimientosController {
   @Post('entrada')
   @Roles('admin', 'user')
   entrada(@Req() req: any, @Body() dto: MovimientoBaseDto) {
-    return this.movimientos.entrada(req.user.id, dto);
+    return this.movimientos.registrarMovimiento({
+      ...dto,
+      userId: req.user.id,
+      tipo: 'ENTRADA',
+    });
   }
 
   // 🔹 Salida directa
   @Post('salida')
   @Roles('admin', 'user')
   salida(@Req() req: any, @Body() dto: MovimientoBaseDto) {
-    return this.movimientos.salida(req.user.id, dto);
+    return this.movimientos.registrarMovimiento({
+      ...dto,
+      userId: req.user.id,
+      tipo: 'SALIDA',
+    });
   }
 
   // 🔹 Ajuste directo
   @Post('ajuste')
   @Roles('admin', 'user')
   ajuste(@Req() req: any, @Body() dto: AjusteDto) {
-    return this.movimientos.ajuste(req.user.id, dto);
+    return this.movimientos.registrarMovimiento({
+      ...dto,
+      userId: req.user.id,
+      tipo: 'AJUSTE',
+    });
   }
 }

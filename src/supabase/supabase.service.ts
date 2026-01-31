@@ -16,7 +16,6 @@ export class SupabaseService {
       auth: { persistSession: false },
     });
 
-    // IMPORTANTE: este se usa para signInWithPassword (login)
     this.anonClient = createClient(url, anonKey, {
       auth: { persistSession: false },
     });

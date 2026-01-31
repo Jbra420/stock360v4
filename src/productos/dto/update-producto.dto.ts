@@ -1,4 +1,13 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Min, MinLength, IsUUID, Matches } from 'class-validator';
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+  IsUUID,
+  Matches,
+} from 'class-validator';
 
 export class UpdateProductoDto {
   @IsOptional()
@@ -13,7 +22,9 @@ export class UpdateProductoDto {
   @IsOptional()
   @IsString()
   @MinLength(2)
-  @Matches(/^[A-Za-z0-9-_]+$/, { message: 'sku solo permite letras, números, guiones y guion bajo' })
+  @Matches(/^[A-Za-z0-9-_]+$/, {
+    message: 'sku solo permite letras, números, guiones y guion bajo',
+  })
   sku?: string;
 
   @IsOptional()
@@ -32,7 +43,12 @@ export class UpdateProductoDto {
   @IsBoolean()
   is_active?: boolean;
 
-  // editar stock mínimo desde admin
+  // Inventario
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  stock_actual?: number;   // ✅ ESTE FALTABA
+
   @IsOptional()
   @IsInt()
   @Min(0)

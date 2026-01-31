@@ -1,62 +1,172 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { MovimientoBaseDto } from './dto/movimiento-base.dto';
-import { AjusteDto } from './dto/ajuste.dto';
-
-
 type TipoMovimiento = 'ENTRADA' | 'SALIDA' | 'AJUSTE';
-type AppRole = 'admin' | 'user';
-
-
 
 @Injectable()
 export class MovimientosService {
   constructor(private supabase: SupabaseService) {}
 
 async registrarMovimiento(dto: any) {
-  const { userId, producto_id, codigo, nombre, tipo, cantidad, motivo } = dto;
+  const {
+    userId,
+    producto_id,
+    codigo,
+    sku,
+    nombre,
+    tipo,
+    cantidad,
+    motivo,
+    categoria_id: categoriaIdRaw,
+    categoriaId,
+    categoria,
+    categoria_nombre,
+    categoriaName,
+    descripcion,
+    talla,
+    color,
+    stock_minimo,
+    eliminar_producto,
+  } = dto;
 
   if (!userId) throw new BadRequestException('Falta userId');
   if (!tipo) throw new BadRequestException('Falta tipo (ENTRADA | SALIDA | AJUSTE)');
   if (cantidad == null) throw new BadRequestException('Falta cantidad');
 
   let productoId: string | undefined = producto_id;
+  let productoWasInactive = false;
+  let skuInput = codigo ?? sku;
+  let categoria_id: string | undefined = categoriaIdRaw ?? categoriaId;
 
-  if (!productoId && codigo) {
+  if (!categoria_id) {
+    const categoriaNombre = categoria ?? categoria_nombre ?? categoriaName;
+    if (categoriaNombre) {
+      const { data: cats, error } = await this.supabase
+        .admin()
+        .from('categorias')
+        .select('id, nombre')
+        .ilike('nombre', String(categoriaNombre))
+        .limit(5);
+
+      if (error) throw new BadRequestException(error.message);
+      if (cats && cats.length === 1) {
+        categoria_id = String(cats[0].id);
+      } else if (cats && cats.length > 1) {
+        throw new BadRequestException({
+          message: 'Hay más de una categoría con ese nombre. Usa categoria_id.',
+          opciones: cats,
+        });
+      }
+    }
+  }
+
+  if (productoId) {
     const { data: prod, error } = await this.supabase
       .admin()
       .from('productos')
-      .select('id')
-      .eq('sku', String(codigo))
+      .select('id, is_active')
+      .eq('id', String(productoId))
       .single();
 
-    if (error || !prod) throw new BadRequestException('No existe producto con ese código (SKU)');
-    productoId = String(prod.id);
+    if (error || !prod) throw new BadRequestException('No existe producto con ese id');
+    productoWasInactive = prod.is_active === false;
+  }
+
+  if (!productoId && skuInput) {
+    const { data: prod, error } = await this.supabase
+      .admin()
+      .from('productos')
+      .select('id, is_active')
+      .eq('sku', String(skuInput))
+      .single();
+
+    if (error || !prod) {
+      productoId = undefined;
+    } else {
+      productoId = String(prod.id);
+      productoWasInactive = prod.is_active === false;
+    }
   }
 
   if (!productoId && nombre) {
     const { data: prods, error } = await this.supabase
       .admin()
       .from('productos')
-      .select('id, nombre, sku')
+      .select('id, nombre, sku, is_active')
       .ilike('nombre', String(nombre))
       .limit(5);
 
     if (error) throw new BadRequestException(error.message);
-    if (!prods || prods.length === 0) throw new BadRequestException('No existe producto con ese nombre');
+    if (!prods || prods.length === 0) {
+      productoId = undefined;
+    } else {
+      if (prods.length > 1) {
+        throw new BadRequestException({
+          message: 'Hay más de un producto con ese nombre. Usa producto_id o codigo(sku).',
+          opciones: prods,
+        });
+      }
 
-    if (prods.length > 1) {
-      throw new BadRequestException({
-        message: 'Hay más de un producto con ese nombre. Usa producto_id o codigo(sku).',
-        opciones: prods,
-      });
+      productoId = String(prods[0].id);
+      productoWasInactive = prods[0].is_active === false;
     }
 
-    productoId = String(prods[0].id);
   }
 
   if (!productoId) {
-    throw new BadRequestException('Debes enviar producto_id o codigo(sku) o nombre');
+    if (!skuInput && nombre) {
+      const base = String(nombre)
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9-_]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^[-_]+|[-_]+$/g, '');
+      const safeBase = base.length >= 2 ? base : 'SKU';
+      const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+      skuInput = `${safeBase}-${Date.now().toString(36).toUpperCase()}-${rand}`;
+    }
+
+    if (!nombre || !skuInput || !categoria_id) {
+      throw new BadRequestException(
+        'Producto no encontrado. Para crearlo debes enviar nombre, codigo(sku) y categoria_id'
+      );
+    }
+
+    const { data: producto, error: prodErr } = await this.supabase
+      .admin()
+      .from('productos')
+      .insert({
+        nombre: String(nombre),
+        descripcion: descripcion ?? null,
+        sku: String(skuInput),
+        talla: talla ?? null,
+        color: color ?? null,
+        categoria_id: String(categoria_id),
+        created_by: String(userId),
+        is_active: true,
+      })
+      .select('id')
+      .single();
+
+    if (prodErr || !producto) {
+      throw new BadRequestException(`No se pudo crear el producto: ${prodErr?.message ?? 'desconocido'}`);
+    }
+
+    const stockMin = Number(stock_minimo ?? 0);
+    const { error: invErr } = await this.supabase
+      .admin()
+      .from('inventario')
+      .insert({
+        producto_id: producto.id,
+        stock_actual: 0,
+        stock_minimo: Number.isFinite(stockMin) ? stockMin : 0,
+      });
+
+    if (invErr) {
+      await this.supabase.admin().from('productos').delete().eq('id', producto.id);
+      throw new BadRequestException(`Producto creado pero inventario falló: ${invErr.message}`);
+    }
+
+    productoId = String(producto.id);
   }
 
   return this.aplicarMovimiento(
@@ -64,7 +174,11 @@ async registrarMovimiento(dto: any) {
     String(productoId),
     tipo,
     Number(cantidad),
-    motivo
+    motivo,
+    {
+      eliminarProducto: Boolean(eliminar_producto),
+      activarSiStockPositivo: productoWasInactive,
+    }
   );
 }
 
@@ -127,24 +241,13 @@ async registrarMovimiento(dto: any) {
     data,
   };
 }
-  async entrada(userId: string, dto: MovimientoBaseDto) {
-    return this.aplicarMovimiento(userId, dto.producto_id, 'ENTRADA', dto.cantidad, dto.motivo);
-  }
-
-  async salida(userId: string, dto: MovimientoBaseDto) {
-    return this.aplicarMovimiento(userId, dto.producto_id, 'SALIDA', dto.cantidad, dto.motivo);
-  }
-
-  async ajuste(userId: string, dto: AjusteDto) {
-    return this.aplicarMovimiento(userId, dto.producto_id, 'AJUSTE', dto.cantidad, dto.motivo);
-  }
-
   private async aplicarMovimiento(
     userId: string,
     productoId: string,
     tipo: TipoMovimiento,
     cantidad: number,
     motivo?: string,
+    opts?: { eliminarProducto?: boolean; activarSiStockPositivo?: boolean },
   ) {
     // 1) Leer inventario actual
     const { data: inv, error: invErr } = await this.supabase
@@ -218,6 +321,30 @@ async registrarMovimiento(dto: any) {
         .eq('producto_id', productoId);
 
       throw new BadRequestException(`Movimiento falló: ${movErr.message}`);
+    }
+
+    if (opts?.activarSiStockPositivo && stockResultante > 0) {
+      const { error: actErr } = await this.supabase
+        .admin()
+        .from('productos')
+        .update({ is_active: true })
+        .eq('id', productoId);
+
+      if (actErr) throw new BadRequestException(actErr.message);
+    }
+
+    if (opts?.eliminarProducto) {
+      if (stockResultante !== 0) {
+        throw new BadRequestException('Para eliminar producto, el stock debe quedar en 0');
+      }
+
+      const { error: delErr } = await this.supabase
+        .admin()
+        .from('productos')
+        .update({ is_active: false })
+        .eq('id', productoId);
+
+      if (delErr) throw new BadRequestException(delErr.message);
     }
 
     return {

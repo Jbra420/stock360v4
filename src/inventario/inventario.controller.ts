@@ -1,20 +1,28 @@
-import { Controller, Get, Query, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { InventarioService } from './inventario.service';
+import { CreateMovimientoDto } from './dto/create-movimiento.dto';
 import { AuthGuard } from '../auth/auth.guard';
-import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from 'src/auth/roles.decorator';
 
 @Controller('inventario')
 @UseGuards(AuthGuard, RolesGuard)
 export class InventarioController {
-  constructor(private readonly inv: InventarioService) {}
+  constructor(private readonly service: InventarioService) {}
 
   @Get()
-  @Roles('admin', 'user')
-  list(
+  listar(
     @Query('search') search?: string,
-    @Query('categoria_id') categoria_id?: string,
+    @Query('categoria') categoria?: string,
+    @Query('categoria_id') categoriaId?: string,
   ) {
-    return this.inv.list(search, categoria_id);
+    const cat = categoriaId ?? categoria ?? undefined;
+    return this.service.listar(search, cat);
+  }
+
+  @Post('movimientos')
+  @Roles('admin', 'user')
+  crearMovimiento(@Req() req: any, @Body() dto: CreateMovimientoDto) {
+    return this.service.crearMovimiento(req.user.id, dto);
   }
 }

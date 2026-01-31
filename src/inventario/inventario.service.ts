@@ -1,85 +1,129 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { CreateMovimientoDto } from './dto/create-movimiento.dto';
 
 @Injectable()
 export class InventarioService {
   constructor(private supabase: SupabaseService) {}
 
-  async list(search?: string, categoria_id?: string) {
+  async listar(search?: string, categoriaId?: string) {
+    const q = this.supabase
+      .admin()
+      .from('v_inventario_detalle')
+      .select(
+        'producto_id, nombre, sku, talla, color, categoria_id, categoria_nombre, stock_actual, stock_minimo, bajo_stock, updated_at',
+        { count: 'exact' },
+      )
+      .eq('is_active', true);
 
-    let q = this.supabase
+    const searchTrim = String(search ?? '').trim();
+    if (searchTrim) {
+      q.or(`nombre.ilike.%${searchTrim}%,sku.ilike.%${searchTrim}%`);
+    }
+
+    const cat = String(categoriaId ?? '').trim();
+    if (cat) {
+      q.eq('categoria_id', cat);
+    }
+
+    const { data, error, count } = await q.order('nombre', { ascending: true });
+    if (error) throw new BadRequestException(error.message);
+
+    return { items: data ?? [], total: count ?? (data?.length ?? 0) };
+  }
+
+  private async assertRoleCanMoveStock(userId: string) {
+    const { data: profile, error } = await this.supabase
+      .admin()
+      .from('profiles')
+      .select('id, role, is_active')
+      .eq('id', userId)
+      .single();
+
+    if (error || !profile) throw new ForbiddenException('Perfil no encontrado');
+    if (profile.is_active === false) throw new ForbiddenException('Usuario inactivo');
+
+    const role = String(profile.role ?? '').toLowerCase();
+
+    const allowed = new Set(['admin', 'operativo', 'empleado']);
+    if (!allowed.has(role)) throw new ForbiddenException('No autorizado para mover inventario');
+  }
+
+  async crearMovimiento(userId: string, dto: CreateMovimientoDto) {
+    await this.assertRoleCanMoveStock(userId);
+
+    // 1) leer inventario actual del producto
+    const { data: inv, error: invReadErr } = await this.supabase
       .admin()
       .from('inventario')
-      .select(
-        `
-        producto_id,
-        stock_actual,
-        stock_minimo,
-        updated_at,
-        productos (
-          id,
-          nombre,
-          sku,
-          talla,
-          color,
-          categoria_id,
-          is_active,
-          created_at,
-          updated_at,
-          categorias ( id, nombre )
-        )
-      `,
-      )
-      .order('updated_at', { ascending: false });
+      .select('producto_id, stock_actual')
+      .eq('producto_id', dto.producto_id)
+      .single();
 
-    const s = (search ?? '').trim();
-    if (s) {
-      q = q.or(`nombre.ilike.%${s}%,sku.ilike.%${s}%`, { foreignTable: 'productos' });
+    if (invReadErr) throw new BadRequestException(invReadErr.message);
+
+    const stockAnterior = Number(inv.stock_actual ?? 0);
+
+    // 2) calcular stock nuevo
+    let stockNuevo = stockAnterior;
+    let cantidadRegistrada = 0;
+
+    if (dto.tipo === 'ENTRADA') {
+      const cant = Number(dto.cantidad ?? 0);
+      if (!cant || cant < 1) throw new BadRequestException('cantidad requerida (>=1) para ENTRADA');
+      stockNuevo = stockAnterior + cant;
+      cantidadRegistrada = cant;
     }
 
-    const cat = (categoria_id ?? '').trim();
-    if (cat && cat !== 'all') {
-      q = q.eq('productos.categoria_id', cat);
+    if (dto.tipo === 'SALIDA') {
+      const cant = Number(dto.cantidad ?? 0);
+      if (!cant || cant < 1) throw new BadRequestException('cantidad requerida (>=1) para SALIDA');
+      if (cant > stockAnterior) throw new BadRequestException('Stock insuficiente para SALIDA');
+      stockNuevo = stockAnterior - cant;
+      cantidadRegistrada = cant;
     }
 
-    const { data, error } = await q;
+    if (dto.tipo === 'AJUSTE') {
+      const nuevo = dto.nuevo_stock;
+      if (nuevo === undefined || nuevo === null || Number.isNaN(Number(nuevo)))
+        throw new BadRequestException('nuevo_stock requerido (>=0) para AJUSTE');
+      if (Number(nuevo) < 0) throw new BadRequestException('nuevo_stock no puede ser negativo');
 
-    if (error) {
-      return { ok: false, total: 0, error: error.message, items: [] };
+      stockNuevo = Number(nuevo);
+      cantidadRegistrada = Math.abs(stockNuevo - stockAnterior);
+      if (!dto.motivo?.trim()) {
+        throw new BadRequestException('motivo es obligatorio para AJUSTE');
+      }
     }
 
-    const items = (data ?? []).map((row: any) => {
-      const p = row.productos ?? {};
-      const categoriaNombre = p?.categorias?.nombre ?? 'Sin categoría';
+    // 3) actualizar inventario
+    const { error: invUpdErr } = await this.supabase
+      .admin()
+      .from('inventario')
+      .update({ stock_actual: stockNuevo, updated_at: new Date().toISOString() })
+      .eq('producto_id', dto.producto_id);
 
-      const stockActual = Number(row.stock_actual ?? 0);
-      const stockMinimo = Number(row.stock_minimo ?? 0);
+    if (invUpdErr) throw new BadRequestException(invUpdErr.message);
 
-      return {
-        producto_id: row.producto_id,
-        nombre: p.nombre ?? '—',
-        sku: p.sku ?? '—',
-        talla: p.talla ?? '',
-        color: p.color ?? '',
-        categoria_id: p.categoria_id ?? null,
-        categoria_nombre: categoriaNombre,
-        stock_actual: stockActual,
-        stock_minimo: stockMinimo,
-        bajo_stock: stockActual <= stockMinimo,
-        es_activo: Boolean(p.is_active ?? true),
-        creado_at: p.created_at ?? null,
-        actualizado_at: row.updated_at ?? p.updated_at ?? null,
+    // 4) registrar movimiento
+    const { data: mov, error: movErr } = await this.supabase
+      .admin()
+      .from('movimientos_inventario')
+      .insert({
+        producto_id: dto.producto_id,
+        tipo: dto.tipo,
+        cantidad: cantidadRegistrada,
+        stock_anterior: stockAnterior,
+        stock_nuevo: stockNuevo,
+        motivo: dto.motivo ?? null,
+        referencia: dto.referencia ?? null,
+        created_by: userId,
+      })
+      .select('*')
+      .single();
 
-        id: row.producto_id,
-        stock: stockActual,
-        categoria: categoriaNombre,
-      };
-    });
+    if (movErr) throw new BadRequestException(movErr.message);
 
-    return {
-      ok: true,
-      total: items.length,
-      items,
-    };
+    return { ok: true, movimiento: mov, stock_anterior: stockAnterior, stock_nuevo: stockNuevo };
   }
 }

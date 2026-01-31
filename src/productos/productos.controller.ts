@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -44,20 +45,26 @@ export class ProductosController {
   @Post()
   @Roles('admin')
   create(@Req() req: any, @Body() dto: CreateProductoDto) {
-    return this.productos.create(req.user.id, dto);
+    throw new ForbiddenException(
+      'La creación de productos está deshabilitada. Usa movimientos para crear productos.'
+    );
   }
 
   // Solo admin: editar
   @Patch(':id')
   @Roles('admin')
   update(@Param('id') id: string, @Body() dto: UpdateProductoDto) {
-    return this.productos.update(id, dto);
+    throw new ForbiddenException(
+      'La edición de productos está deshabilitada. Usa movimientos para crear productos.'
+    );
   }
 
   // Solo admin: eliminar
   @Delete(':id')
   @Roles('admin')
   remove(@Param('id') id: string) {
-    return this.productos.remove(id);
+    throw new ForbiddenException(
+      'La eliminación de productos está deshabilitada. Usa movimientos para eliminar productos.'
+    );
   }
 }
