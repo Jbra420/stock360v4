@@ -14,12 +14,6 @@ export class RfidService {
       source: source ?? 'esp32',
       at: new Date().toISOString(),
     });
-
-    // 🔜 Aquí luego:
-    // - buscar producto por UID
-    // - registrar movimiento
-    // - actualizar inventario
-
     return {
       ok: true,
       uid,
