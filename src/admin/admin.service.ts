@@ -5,7 +5,9 @@ import { SupabaseService } from '../supabase/supabase.service';
 export class AdminService {
   constructor(private supabase: SupabaseService) {}
 
-  async dashboard() {
+  async dashboard(opts?: { from?: string; to?: string }) {
+    const from = opts?.from;
+    const to = opts?.to;
     // 1) Totales
     const [{ count: totalProductos, error: prodErr }, { count: totalCategorias, error: catErr }] =
       await Promise.all([
@@ -48,6 +50,85 @@ export class AdminService {
 
     if (movErr) throw new BadRequestException(movErr.message);
 
+    // 3.1) Movimientos por rango (para resumen semanal)
+    let movimientosRango: any[] = [];
+    let resumenSemanal: Array<{
+      fecha: string;
+      entradas: number;
+      salidas: number;
+      ajustes: number;
+      cantidad_entradas: number;
+      cantidad_salidas: number;
+      cantidad_ajustes: number;
+      movimientos_total: number;
+    }> = [];
+
+    if (from || to) {
+      let q = this.supabase
+        .admin()
+        .from('movimientos')
+        .select('id, tipo, cantidad, created_at')
+        .order('created_at', { ascending: true })
+        .limit(5000);
+
+      if (from) q = q.gte('created_at', from);
+      if (to) q = q.lte('created_at', to);
+
+      const { data, error } = await q;
+      if (error) throw new BadRequestException(error.message);
+
+      movimientosRango = data ?? [];
+      const byDate = new Map<
+        string,
+        {
+          fecha: string;
+          entradas: number;
+          salidas: number;
+          ajustes: number;
+          cantidad_entradas: number;
+          cantidad_salidas: number;
+          cantidad_ajustes: number;
+          movimientos_total: number;
+        }
+      >();
+
+      for (const mov of movimientosRango) {
+        const fecha = String(mov.created_at).slice(0, 10);
+        const tipo = String(mov.tipo ?? '').toUpperCase();
+        const cantidad = Number(mov.cantidad ?? 0);
+        let row = byDate.get(fecha);
+        if (!row) {
+          row = {
+            fecha,
+            entradas: 0,
+            salidas: 0,
+            ajustes: 0,
+            cantidad_entradas: 0,
+            cantidad_salidas: 0,
+            cantidad_ajustes: 0,
+            movimientos_total: 0,
+          };
+          byDate.set(fecha, row);
+        }
+
+        if (tipo === 'ENTRADA') {
+          row.entradas += 1;
+          row.cantidad_entradas += cantidad;
+        } else if (tipo === 'SALIDA') {
+          row.salidas += 1;
+          row.cantidad_salidas += cantidad;
+        } else if (tipo === 'AJUSTE') {
+          row.ajustes += 1;
+          row.cantidad_ajustes += cantidad;
+        }
+        row.movimientos_total += 1;
+      }
+
+      resumenSemanal = Array.from(byDate.values()).sort((a, b) =>
+        a.fecha.localeCompare(b.fecha)
+      );
+    }
+
     // 4) Stock por categoría (agregado en backend)
     //    (más simple y estable que depender de GROUP BY en PostgREST)
     const { data: invData, error: invErr } = await this.supabase
@@ -85,6 +166,8 @@ export class AdminService {
       },
       low_stock: lowStock ?? [],
       movimientos_recientes: movimientosRecientes ?? [],
+      movimientos_rango: movimientosRango,
+      resumen_semanal: resumenSemanal,
       stock_por_categoria: stockPorCategoria,
     };
   }

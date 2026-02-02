@@ -39,6 +39,13 @@ export class MovimientosService {
     let skuInput = codigo ?? sku;
     let categoria_id: string | undefined = categoriaIdRaw ?? categoriaId;
     let esProductoNuevo = false; // <--- Flag para saber si necesitamos actualizar luego
+    const uidValue = uid ? String(uid) : undefined;
+    const isMissingColumnError = (message: string, column: string) => {
+      const msg = message.toLowerCase();
+      return msg.includes('column') && msg.includes(column.toLowerCase());
+    };
+    const missingUidColumnsMessage =
+      'No existen columnas uid ni codigo_rfid en productos. Agrega una o envíame el nombre real de la columna.';
 
     // ------------------------------------------------------------------
     // BLOQUE 1: Intentar buscar Categoría por nombre si no hay ID
@@ -82,7 +89,58 @@ export class MovimientosService {
       productoWasInactive = prod.is_active === false;
     }
 
-    // B) Por SKU
+    // B) Por UID (uid o codigo_rfid)
+    if (!productoId && uidValue) {
+      const tryByColumn = async (column: 'uid' | 'codigo_rfid') => {
+        return this.supabase
+          .admin()
+          .from('productos')
+          .select(`id, ${column}, is_active`)
+          .eq(column, uidValue)
+          .limit(5);
+      };
+
+      let prods: any[] | null = null;
+      let error: any | null = null;
+
+      ({ data: prods, error } = await tryByColumn('uid'));
+
+      if (error) {
+        const msg = String(error.message ?? '');
+        if (isMissingColumnError(msg, 'uid')) {
+          ({ data: prods, error } = await tryByColumn('codigo_rfid'));
+        } else {
+          throw new BadRequestException(error.message);
+        }
+      }
+
+      if (!error && (!prods || prods.length === 0)) {
+        const res = await tryByColumn('codigo_rfid');
+        if (res.error) {
+          const msg = String(res.error.message ?? '');
+          if (!isMissingColumnError(msg, 'codigo_rfid')) {
+            throw new BadRequestException(res.error.message);
+          }
+        } else {
+          prods = res.data;
+        }
+      }
+
+      if (!prods || prods.length === 0) {
+        productoId = undefined;
+      } else {
+        if (prods.length > 1) {
+          throw new BadRequestException({
+            message: 'Hay más de un producto con ese UID. Usa producto_id.',
+            opciones: prods,
+          });
+        }
+        productoId = String(prods[0].id);
+        productoWasInactive = prods[0].is_active === false;
+      }
+    }
+
+    // C) Por SKU
     if (!productoId && skuInput) {
       const { data: prod, error } = await this.supabase
         .admin()
@@ -99,7 +157,7 @@ export class MovimientosService {
       }
     }
 
-    // C) Por Nombre
+    // D) Por Nombre
     if (!productoId && nombre) {
       const { data: prods, error } = await this.supabase
         .admin()
@@ -141,19 +199,43 @@ export class MovimientosService {
         categoria_id: String(categoria_id),
         created_by: String(userId),
         is_active: true,
-        uid: uid ? String(uid) : null, // <--- 2. NUEVO: Si es nuevo, insertamos el UID aquí
+        uid: uidValue ?? null, // <--- 2. NUEVO: Si es nuevo, insertamos el UID aquí
       };
       
       if (skuInput) {
         insertProducto.sku = String(skuInput);
       }
 
-      const { data: producto, error: prodErr } = await this.supabase
+      let producto: any | null = null;
+      let prodErr: any | null = null;
+
+      ({ data: producto, error: prodErr } = await this.supabase
         .admin()
         .from('productos')
         .insert(insertProducto)
         .select('id')
-        .single();
+        .single());
+
+      if (prodErr && uidValue) {
+        const msg = String(prodErr.message ?? '');
+        if (isMissingColumnError(msg, 'uid')) {
+          const insertAlt = { ...insertProducto };
+          delete insertAlt.uid;
+          insertAlt.codigo_rfid = uidValue;
+          ({ data: producto, error: prodErr } = await this.supabase
+            .admin()
+            .from('productos')
+            .insert(insertAlt)
+            .select('id')
+            .single());
+          if (prodErr) {
+            const altMsg = String(prodErr.message ?? '');
+            if (isMissingColumnError(altMsg, 'codigo_rfid')) {
+              throw new BadRequestException(missingUidColumnsMessage);
+            }
+          }
+        }
+      }
 
       if (prodErr || !producto) {
         throw new BadRequestException(`No se pudo crear el producto: ${prodErr?.message ?? 'desconocido'}`);
@@ -181,13 +263,33 @@ export class MovimientosService {
     // ------------------------------------------------------------------
     // BLOQUE 4: Si YA existía y viene UID, actualizar el producto
     // ------------------------------------------------------------------
-    else if (uid && !esProductoNuevo) { 
+    else if (uidValue && !esProductoNuevo) { 
       // <--- 3. NUEVO: Si el producto ya existía y nos mandan un UID, lo actualizamos (vinculamos el tag)
-      await this.supabase
+      const { error: updErr } = await this.supabase
         .admin()
         .from('productos')
-        .update({ uid: String(uid) })
+        .update({ uid: uidValue })
         .eq('id', productoId);
+
+      if (updErr) {
+        const msg = String(updErr.message ?? '');
+        if (isMissingColumnError(msg, 'uid')) {
+          const { error: updAltErr } = await this.supabase
+            .admin()
+            .from('productos')
+            .update({ codigo_rfid: uidValue })
+            .eq('id', productoId);
+          if (updAltErr) {
+            const altMsg = String(updAltErr.message ?? '');
+            if (isMissingColumnError(altMsg, 'codigo_rfid')) {
+              throw new BadRequestException(missingUidColumnsMessage);
+            }
+            throw new BadRequestException(updAltErr.message);
+          }
+        } else {
+          throw new BadRequestException(updErr.message);
+        }
+      }
     }
 
     // ------------------------------------------------------------------

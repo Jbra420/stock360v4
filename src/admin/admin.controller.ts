@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -11,7 +11,7 @@ export class AdminController {
 
   @Get('dashboard')
   @Roles('admin')
-  dashboard() {
-    return this.admin.dashboard();
+  dashboard(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.admin.dashboard({ from, to });
   }
 }
