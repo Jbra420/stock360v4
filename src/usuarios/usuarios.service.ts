@@ -7,6 +7,10 @@ type Rol = 'admin' | 'user';
 export class UsuariosService {
   constructor(private readonly supabase: SupabaseService) {}
 
+  private isForeignKeyError(message?: string) {
+    return /foreign key|violat/i.test(message ?? '');
+  }
+
   private buildEmailFromUsername(username: string) {
     // Supabase Auth requiere email si estás usando Email provider.
     // Dominio interno para cuentas del sistema:
@@ -126,13 +130,80 @@ export class UsuariosService {
   async remove(id: string) {
     const sb = this.supabase.admin();
 
-    // borrar profile primero (opcional)
-    await sb.from('profiles').delete().eq('id', id);
+    // borrar profile primero
+    const { error: profErr } = await sb.from('profiles').delete().eq('id', id);
+    if (profErr) {
+      const msg = profErr.message ?? '';
+      const isFk = this.isForeignKeyError(msg);
+      if (isFk) {
+        // si tiene referencias, desactivar en lugar de borrar
+        const { error: softErr } = await sb.from('profiles').update({ is_active: false }).eq('id', id);
+        if (softErr) throw new BadRequestException(softErr.message);
+        return { ok: true, deleted: false, inactive: true, reason: 'has-related-records' };
+      }
+      throw new BadRequestException(msg);
+    }
 
-    // borrar auth user (lo importante)
-    const { error } = await sb.auth.admin.deleteUser(id);
-    if (error) throw new BadRequestException(error.message);
+    // borrar auth user (solo si el profile se borró)
+    const { error: authErr } = await sb.auth.admin.deleteUser(id);
+    if (authErr) throw new BadRequestException(authErr.message);
 
-    return { ok: true };
+    return { ok: true, deleted: true };
+  }
+
+  async purgeInactive(days = 30) {
+    const sb = this.supabase.admin();
+    const safeDays = Number.isFinite(days) && days > 0 ? Math.floor(days) : 30;
+    const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: candidates, error: listErr } = await sb
+      .from('profiles')
+      .select('id, updated_at, created_at')
+      .eq('is_active', false)
+      .or(`updated_at.lt.${cutoff},and(updated_at.is.null,created_at.lt.${cutoff})`);
+
+    if (listErr) throw new BadRequestException(listErr.message);
+
+    const ids = (candidates ?? []).map((c: any) => c.id).filter(Boolean);
+    if (ids.length === 0) {
+      return { ok: true, days: safeDays, total: 0, deleted: 0, skipped_fk: 0, failed: 0 };
+    }
+
+    let deleted = 0;
+    let skippedFk = 0;
+    let failed = 0;
+    const failures: Array<{ id: string; reason: string }> = [];
+
+    for (const id of ids) {
+      const { error: profErr } = await sb.from('profiles').delete().eq('id', id);
+      if (profErr) {
+        if (this.isForeignKeyError(profErr.message)) {
+          skippedFk++;
+          continue;
+        }
+        failed++;
+        failures.push({ id, reason: profErr.message ?? 'profile-delete-failed' });
+        continue;
+      }
+
+      const { error: authErr } = await sb.auth.admin.deleteUser(id);
+      if (authErr) {
+        failed++;
+        failures.push({ id, reason: authErr.message ?? 'auth-delete-failed' });
+        continue;
+      }
+
+      deleted++;
+    }
+
+    return {
+      ok: true,
+      days: safeDays,
+      total: ids.length,
+      deleted,
+      skipped_fk: skippedFk,
+      failed,
+      failures,
+    };
   }
 }

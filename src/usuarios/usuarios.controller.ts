@@ -8,8 +8,12 @@ import {
   Post,
   Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { UsuariosService } from './usuarios.service';
+import { AuthGuard } from '../auth/auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 type Rol = 'admin' | 'user';
 
@@ -63,5 +67,12 @@ export class UsuariosController {
   @Delete(':id')
   async remove(@Param('id') id: string) {
     return this.usuarios.remove(id);
+  }
+
+  @Post('purge-inactivos')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('admin')
+  async purgeInactive(@Body('days') days?: number) {
+    return this.usuarios.purgeInactive(days ?? 30);
   }
 }
