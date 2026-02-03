@@ -3,29 +3,33 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
-  const isAllowedOrigin = (origin: string) => {
-    if (corsOrigins.includes(origin)) return true;
-    try {
-      const host = new URL(origin).hostname;
-      return host === 'vercel.app' || host.endsWith('.vercel.app');
-    } catch {
-      return false;
-    }
-  };
 
+  // Configuración de CORS corregida para Stock360
   app.enableCors({
     origin: (origin, callback) => {
+      // Permitir peticiones sin origen (como Postman o llamadas internas)
       if (!origin) return callback(null, true);
-      if (corsOrigins.length === 0) return callback(null, true);
-      if (isAllowedOrigin(origin)) return callback(null, true);
-      return callback(new Error('Not allowed by CORS'));
+
+      // Esta expresión regular permite:
+      // 1. Cualquier subdominio de .vercel.app (tus despliegues de Vercel)
+      // 2. localhost y 127.0.0.1 (para tus pruebas locales en Angular)
+      const allowedRegex = /^(https?:\/\/(.*\.vercel\.app|localhost|127\.0\.0\.1)(:\d+)?)$/;
+
+      if (allowedRegex.test(origin)) {
+        callback(null, true);
+      } else {
+        // Imprime en los logs de Railway cuál es el origen que está siendo bloqueado
+        console.error(`CORS Bloqueado: El origen ${origin} no está permitido.`);
+        callback(new Error('Not allowed by CORS'));
+      }
     },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
-  await app.listen(Number(process.env.PORT) || 3000);
+
+  // Configuración del puerto para Railway
+  const port = process.env.PORT || 3000;
+  await app.listen(port);
+  console.log(`Backend de Stock360 corriendo en el puerto: ${port}`);
 }
 bootstrap();
