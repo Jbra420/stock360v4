@@ -54,9 +54,11 @@ export class ProductosController {
   @Patch(':id')
   @Roles('admin')
   update(@Param('id') id: string, @Body() dto: UpdateProductoDto) {
-    throw new ForbiddenException(
-      'La edición de productos está deshabilitada. Usa movimientos para crear productos.'
-    );
+    const body: any = dto as any;
+    if (body?.stock_actual !== undefined || body?.stock_minimo !== undefined) {
+      throw new ForbiddenException('El stock solo se modifica mediante movimientos.');
+    }
+    return this.productos.update(id, dto);
   }
 
   // Solo admin: eliminar

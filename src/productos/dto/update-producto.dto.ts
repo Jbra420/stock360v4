@@ -42,15 +42,4 @@ export class UpdateProductoDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
-
-  // Inventario
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  stock_actual?: number;   // ✅ ESTE FALTABA
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  stock_minimo?: number;
 }

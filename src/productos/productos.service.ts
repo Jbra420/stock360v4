@@ -130,16 +130,6 @@ const { data, error } = await this.supabase
 
     if (error) throw new BadRequestException(error.message);
 
-    if (dto.stock_minimo !== undefined) {
-      const { error: invErr } = await this.supabase
-        .admin()
-        .from('inventario')
-        .update({ stock_minimo: dto.stock_minimo })
-        .eq('producto_id', id);
-
-      if (invErr) throw new BadRequestException(invErr.message);
-    }
-
     return this.findOne(updated.id);
   }
 
